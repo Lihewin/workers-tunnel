@@ -27,30 +27,53 @@ jobs:
                   WORKERS_TUNNEL_FALLBACK_SITE: ${{ secrets.WORKERS_TUNNEL_FALLBACK_SITE }}
               run: |
                   python <<'PY'
+                  import json
                   import os
                   from pathlib import Path
 
-                  user_id = os.environ["WORKERS_TUNNEL_USER_ID"]
-                  domain = os.environ["WORKERS_TUNNEL_DOMAIN"]
-                  proxy_ip = os.environ.get("WORKERS_TUNNEL_PROXY_IP", "")
-                  fallback_site = os.environ.get("WORKERS_TUNNEL_FALLBACK_SITE", "")
+                  user_id = os.environ["WORKERS_TUNNEL_USER_ID"].strip()
+                  domain = os.environ["WORKERS_TUNNEL_DOMAIN"].strip()
+                  proxy_ip = os.environ.get("WORKERS_TUNNEL_PROXY_IP", "").strip()
+                  fallback_site = os.environ.get("WORKERS_TUNNEL_FALLBACK_SITE", "").strip()
+
+                  missing = [
+                      name
+                      for name, value in {
+                          "WORKERS_TUNNEL_USER_ID": user_id,
+                          "WORKERS_TUNNEL_DOMAIN": domain,
+                      }.items()
+                      if not value
+                  ]
+                  if missing:
+                      raise SystemExit(f"Missing required secrets: {', '.join(missing)}")
+
+                  def toml_string(value):
+                      return json.dumps(value)
 
                   config = Path("wrangler.toml").read_text()
                   config = config.split("\n[vars]\n", 1)[0].rstrip()
-                  private_config = [
-                      config,
+                  lines = config.splitlines()
+                  first_table = next(
+                      (index for index, line in enumerate(lines) if line.strip().startswith("[")),
+                      len(lines),
+                  )
+                  private_top_level = [
                       "workers_dev = false",
                       "routes = [",
-                      f"  {{ pattern = \"{domain}\", custom_domain = true }},",
+                      f"  {{ pattern = {toml_string(domain)}, custom_domain = true }},",
                       "]",
                       "",
+                  ]
+                  private_vars = [
+                      "",
                       "[vars]",
-                      f"USER_ID = \"{user_id}\"",
-                      f"PROXY_IP = \"{proxy_ip}\"",
-                      f"FALLBACK_SITE = \"{fallback_site}\"",
+                      f"USER_ID = {toml_string(user_id)}",
+                      f"PROXY_IP = {toml_string(proxy_ip)}",
+                      f"FALLBACK_SITE = {toml_string(fallback_site)}",
                       "SHOW_URI = \"true\"",
                   ]
-                  Path("wrangler.deploy.toml").write_text("\n\n".join(private_config) + "\n")
+                  deploy_config = lines[:first_table] + private_top_level + lines[first_table:] + private_vars
+                  Path("wrangler.deploy.toml").write_text("\n".join(deploy_config) + "\n")
                   PY
             - name: Deploy
               uses: cloudflare/wrangler-action@v3
