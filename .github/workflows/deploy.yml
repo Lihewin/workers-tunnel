@@ -19,8 +19,42 @@ jobs:
               with:
                   toolchain: stable
                   target: wasm32-unknown-unknown
-            - run: cargo install cargo-generate
+            - name: Prepare private Wrangler config
+              env:
+                  WORKERS_TUNNEL_USER_ID: ${{ secrets.WORKERS_TUNNEL_USER_ID }}
+                  WORKERS_TUNNEL_DOMAIN: ${{ secrets.WORKERS_TUNNEL_DOMAIN }}
+                  WORKERS_TUNNEL_PROXY_IP: ${{ secrets.WORKERS_TUNNEL_PROXY_IP }}
+                  WORKERS_TUNNEL_FALLBACK_SITE: ${{ secrets.WORKERS_TUNNEL_FALLBACK_SITE }}
+              run: |
+                  python <<'PY'
+                  import os
+                  from pathlib import Path
+
+                  user_id = os.environ["WORKERS_TUNNEL_USER_ID"]
+                  domain = os.environ["WORKERS_TUNNEL_DOMAIN"]
+                  proxy_ip = os.environ.get("WORKERS_TUNNEL_PROXY_IP", "")
+                  fallback_site = os.environ.get("WORKERS_TUNNEL_FALLBACK_SITE", "")
+
+                  config = Path("wrangler.toml").read_text()
+                  config = config.split("\n[vars]\n", 1)[0].rstrip()
+                  private_config = [
+                      config,
+                      "workers_dev = false",
+                      "routes = [",
+                      f"  {{ pattern = \"{domain}\", custom_domain = true }},",
+                      "]",
+                      "",
+                      "[vars]",
+                      f"USER_ID = \"{user_id}\"",
+                      f"PROXY_IP = \"{proxy_ip}\"",
+                      f"FALLBACK_SITE = \"{fallback_site}\"",
+                      "SHOW_URI = \"true\"",
+                  ]
+                  Path("wrangler.deploy.toml").write_text("\n\n".join(private_config) + "\n")
+                  PY
             - name: Deploy
               uses: cloudflare/wrangler-action@v3
               with:
                   apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+                  accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+                  command: deploy --config wrangler.deploy.toml
